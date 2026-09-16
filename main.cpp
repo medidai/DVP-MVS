@@ -284,15 +284,15 @@ void ProcessProblem(const Problem& problem) {
 	cv::Mat normal = cv::Mat(height, width, CV_32FC3);
 	cv::Mat pixel_states = APD.GetPixelStates();
 
-	//yzl
-	unsigned int views;
-	std::vector<cv::Mat> matVector;
-	std::vector<cv::Mat> matVector_uchar;
-	for (int i = 0; i < problem.src_image_ids.size(); ++i) {
-		cv::Mat_<cv::Vec3b> tempImage(height, width, CV_8UC3);
-		cv::Mat_<uchar> tempImage_uchar(height, width);
-		matVector.push_back(tempImage);
-		matVector_uchar.push_back(tempImage_uchar);
+	// Visibility prior: per source view, pixels that did NOT select the view are
+	// grouped into connected components and small ones are flipped to
+	// "selected" (hole filling). Medida: rewritten on uchar masks and
+	// parallelised over source views; upstream did this single-threaded on
+	// CV_8UC3 mats and dominated runtime at fine scales.
+	const int num_src = (int)problem.src_image_ids.size();
+	std::vector<cv::Mat> selected_masks(num_src);
+	for (int i = 0; i < num_src; ++i) {
+		selected_masks[i] = cv::Mat(height, width, CV_8UC1);
 	}
 
 	for (int r = 0; r < height; ++r) {
@@ -305,48 +305,31 @@ void ProcessProblem(const Problem& problem) {
 			}
 			normal.at<cv::Vec3f>(r, c) = cv::Vec3f(plane_hypothesis.x, plane_hypothesis.y, plane_hypothesis.z);
 
-			views = APD.GetPixelSelectedViews(r, c);
-			for (int i = 0; i < problem.src_image_ids.size(); ++i) {
-				if ((views >> i) & 1) {
-					matVector[i].at<cv::Vec3b>(r, c) = cv::Vec3b(255, 255, 255);
-					matVector_uchar[i].at<uchar>(r, c) = 255;
-
-				}
-				else {
-					matVector[i].at<cv::Vec3b>(r, c) = cv::Vec3b(0, 0, 0);
-					matVector_uchar[i].at<uchar>(r, c) = 0;
-				}
+			const unsigned int views = APD.GetPixelSelectedViews(r, c);
+			for (int i = 0; i < num_src; ++i) {
+				selected_masks[i].at<uchar>(r, c) = ((views >> i) & 1) ? 255 : 0;
 			}
 		}
 	}
 
-	for (int i = 0; i < problem.src_image_ids.size(); ++i) {
+	const int min_hole_size = 20 * (8 / problem.scale_size) * (8 / problem.scale_size);
+#pragma omp parallel for schedule(dynamic)
+	for (int i = 0; i < num_src; ++i) {
 		cv::Mat lab_mask(height, width, CV_32S);
 		std::vector<int> label_cnt;
-
-		Connect(matVector_uchar[i], lab_mask, label_cnt);
+		Connect(selected_masks[i], lab_mask, label_cnt);
 		Label_Update(lab_mask, label_cnt);
 
-		int label_num = label_cnt.size();
-		std::vector<cv::Vec3b> colors(label_num);
-		colors[0] = cv::Vec3b(0, 0, 0);
-		for (int j = 1; j < label_num; j++) {
-			if (label_cnt[j] < 20 * (8 / problem.scale_size) * (8 / problem.scale_size))
-				colors[j] = cv::Vec3b(0, 0, 0);
-			else
-				colors[j] = cv::Vec3b(rand() % 256, rand() % 256, rand() % 256);
+		// label 0 = already-selected pixels; other labels = unselected components.
+		std::vector<uchar> keep_unselected(label_cnt.size(), 0);
+		for (size_t j = 1; j < label_cnt.size(); j++) {
+			keep_unselected[j] = label_cnt[j] >= min_hole_size;
 		}
-		cv::Mat img_connect(height, width, CV_8UC3);
 		for (int y = 0; y < height; y++) {
+			const int* labels = lab_mask.ptr<int>(y);
+			uchar* mask = selected_masks[i].ptr<uchar>(y);
 			for (int x = 0; x < width; x++) {
-				int label = lab_mask.at<int>(y, x);
-				//matVector[i].at<cv::Vec3b>(y, x) = colors[label];
-				if (colors[label] != cv::Vec3b(0, 0, 0)) {
-					matVector[i].at<cv::Vec3b>(y, x) = cv::Vec3b(0, 0, 0);
-				}
-				else {
-					matVector[i].at<cv::Vec3b>(y, x) = cv::Vec3b(255, 255, 255);
-				}
+				mask[x] = keep_unselected[labels[x]] ? 0 : 255;
 			}
 		}
 	}
@@ -354,8 +337,8 @@ void ProcessProblem(const Problem& problem) {
 	for (int y = 0; y < height; y++) {
 		for (int x = 0; x < width; x++) {
 			unsigned int temp_selected_views = 0;
-			for (int i = 0; i < problem.src_image_ids.size(); ++i) {
-				if (matVector[i].at<cv::Vec3b>(y, x) == cv::Vec3b(255, 255, 255))
+			for (int i = 0; i < num_src; ++i) {
+				if (selected_masks[i].at<uchar>(y, x) == 255)
 					setBit_YZL(&temp_selected_views, i);
 			}
 			APD.SetPixelSelectedViews(y, x, temp_selected_views);

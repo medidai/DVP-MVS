@@ -937,8 +937,8 @@ __device__ float ComputeBilateralNCCNew(
 						int i = 0;
 						int j = 0;
 						if (k != 8) {
-							i = candidate[nei_center * LAB_BOUNDARY_NUM * NUM_IMAGES + (src_idx - 1) * LAB_BOUNDARY_NUM + k].x;
-							j = candidate[nei_center * LAB_BOUNDARY_NUM * NUM_IMAGES + (src_idx - 1) * LAB_BOUNDARY_NUM + k].y;
+							i = candidate[((size_t)nei_center * (helper->params->num_images - 1) + (src_idx - 1)) * LAB_BOUNDARY_NUM + k].x;
+							j = candidate[((size_t)nei_center * (helper->params->num_images - 1) + (src_idx - 1)) * LAB_BOUNDARY_NUM + k].y;
 						}
 						if (i == 0 && j == 0) {
 							if (k == 0) { i = -5; j = -5; }
@@ -3788,8 +3788,8 @@ __global__ void GenEdgeInform(
 
 		int ind = src_idx - 1;
 		for (int k = 0; k < LAB_BOUNDARY_NUM; k++) {
-			candidate[center * LAB_BOUNDARY_NUM * NUM_IMAGES + ind * LAB_BOUNDARY_NUM + k].x = min_regions[k].i;
-			candidate[center * LAB_BOUNDARY_NUM * NUM_IMAGES + ind * LAB_BOUNDARY_NUM + k].y = min_regions[k].j;
+			candidate[((size_t)center * (helper->params->num_images - 1) + ind) * LAB_BOUNDARY_NUM + k].x = min_regions[k].i;
+			candidate[((size_t)center * (helper->params->num_images - 1) + ind) * LAB_BOUNDARY_NUM + k].y = min_regions[k].j;
 		}
 	}
 

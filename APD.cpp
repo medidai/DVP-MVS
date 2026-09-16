@@ -1068,14 +1068,10 @@ void APD::InuputInitialization() {
 		cv::Mat image_float;
 		image_uint.convertTo(image_float, CV_32FC1);
 
+		// Zero-pad / crop the source image to the reference image size.
 		cv::Mat Resize_Image = cv::Mat::zeros(height, width, image_float.type());
-		for (int i = 0; i < height; i++) {
-			for (int j = 0; j < width; j++) {
-				if (i < image_float.rows && j < image_float.cols) {
-					Resize_Image.at<float>(i, j) = image_float.at<float>(i, j);
-				}
-			}
-		}
+		const cv::Rect common(0, 0, std::min(width, image_float.cols), std::min(height, image_float.rows));
+		image_float(common).copyTo(Resize_Image(common));
 		images.push_back(Resize_Image);
 		// assert: images_float.cols == width;
 		// assert: images_float.rows == height;
@@ -1286,7 +1282,10 @@ void APD::InuputInitialization() {
 			}
 		}
 
-		//std::cout << "middle_rate: " << middle_rate << std::endl;
+		const cv::Rect imageRC(0, 0, dep.cols, dep.rows);
+		const auto triangles = DelaunayTriangulation(dep.cols, dep.rows, imageRC, xy_temps, rates);
+
+		if (problem.show_medium_result) {
 		path ref_image_path = image_folder / path(ToFormatIndex(problem.ref_image_id) + ".jpg");
 		cv::Mat image_A = cv::imread(ref_image_path.string(), cv::IMREAD_COLOR);
 		cv::Mat srcImage = image_A.clone();
@@ -1312,8 +1311,6 @@ void APD::InuputInitialization() {
 
 		path colmap_img_path = problem.result_folder / path("COLMAP_" + std::to_string(problem.iteration) + ".jpg");
 		cv::imwrite(colmap_img_path.string(), image_A);
-		const cv::Rect imageRC(0, 0, dep.cols, dep.rows);
-		const auto triangles = DelaunayTriangulation(dep.cols, dep.rows, imageRC, xy_temps, rates);
 
 		for (const auto triangle : triangles) {
 			if (imageRC.contains(triangle.pt1) && imageRC.contains(triangle.pt2) && imageRC.contains(triangle.pt3)) {
@@ -1325,6 +1322,7 @@ void APD::InuputInitialization() {
 
 		path triangulation_path = problem.result_folder / path("Tri_" + std::to_string(problem.iteration) + ".jpg");
 		cv::imwrite(triangulation_path.string(), srcImage);
+		}
 		cv::Mat_<float> mask_tri = cv::Mat::zeros(dep.rows, dep.cols, CV_32FC1);
 		uint32_t idx = 0;
 
@@ -1361,8 +1359,10 @@ void APD::InuputInitialization() {
 			}
 		}
 
-		path depth_img_path = problem.result_folder / path("depth_anything_" + std::to_string(problem.iteration) + ".jpg");
-		ShowDepthMap(depth_img_path, dep, cameras[0].depth_min * 0.6f, cameras[0].depth_max * 1.2f);
+		if (problem.show_medium_result) {
+			path depth_img_path = problem.result_folder / path("depth_anything_" + std::to_string(problem.iteration) + ".jpg");
+			ShowDepthMap(depth_img_path, dep, cameras[0].depth_min * 0.6f, cameras[0].depth_max * 1.2f);
+		}
 
 		if (dep.cols != width || dep.rows != height) {
 			RescaleMatToTargetSize<float>(dep, dep, cv::Size2i(width, height));
@@ -1414,8 +1414,10 @@ void APD::InuputInitialization() {
 			}
 		}
 
-		path normal_img_path = problem.result_folder / path("normal_COLMAP.jpg");
-		ShowNormalMap(normal_img_path, normalMap);
+		if (problem.show_medium_result) {
+			path normal_img_path = problem.result_folder / path("normal_COLMAP.jpg");
+			ShowNormalMap(normal_img_path, normalMap);
+		}
 
 		for (int col = 0; col < width; ++col) {
 			for (int row = 0; row < height; ++row) {
@@ -1576,7 +1578,9 @@ void APD::CudaSpaceInitialization() {
 	cudaMalloc((void**)&fit_plane_hypotheses_cuda, sizeof(float4) * length);
 	cudaMemset(fit_plane_hypotheses_cuda, 0, sizeof(float4) * length);
 
-	cudaMalloc((void**)(&candidate_cuda), length * LAB_BOUNDARY_NUM * NUM_IMAGES * sizeof(short2));
+	// Medida: one candidate slot per actual source view. Upstream hard-coded
+	// NUM_IMAGES=4 and overflowed with more neighbours in pair.txt.
+	cudaMalloc((void**)(&candidate_cuda), (size_t)length * LAB_BOUNDARY_NUM * (num_images - 1) * sizeof(short2));
 
 	// malloc edge array
 	if (problem.params.use_edge || problem.params.use_limit) {
@@ -1780,12 +1784,12 @@ void RescaleMatToTargetSize(const cv::Mat& src, cv::Mat& dst, const cv::Size2i& 
 
 	int type = src.type();
 	cv::Mat src_clone = src.clone();
-	dst = cv::Mat(target_size.height, target_size.width, type);
+	dst = cv::Mat::zeros(target_size.height, target_size.width, type);
 
 	for (int r = 0; r < target_size.height; ++r) {
 		for (int c = 0; c < target_size.width; ++c) {
-			int o_r = static_cast<int>(r / scale_x);
-			int o_c = static_cast<int>(c / scale_y);
+			int o_r = static_cast<int>(r / scale_y);
+			int o_c = static_cast<int>(c / scale_x);
 			if (o_r < 0 || o_c < 0 || o_r >= src_clone.rows || o_c >= src_clone.cols) {
 				continue;
 			}

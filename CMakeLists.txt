@@ -20,6 +20,7 @@ set(Boost_USE_STATIC_RUNTIME OFF)
 find_package(OpenCV REQUIRED)
 find_package(Boost REQUIRED COMPONENTS filesystem system)
 find_package(CUDAToolkit REQUIRED)
+find_package(OpenMP REQUIRED)
 
 include_directories(
 ${OpenCV_INCLUDE_DIRS}
@@ -50,4 +51,5 @@ ${Boost_LIBRARIES}
 "${OpenCV_LIBS}"
 CUDA::cudart
 CUDA::curand
+OpenMP::OpenMP_CXX
 )
