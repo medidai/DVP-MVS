@@ -418,36 +418,65 @@ void ProcessProblem(const Problem& problem) {
 	std::cout << "Cost time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms" << std::endl;
 }
 
+static void PrintUsage() {
+	std::cerr << "USAGE: APD dense_folder [--gpu N] [--final-scale N] [--show-medium]\n"
+	          << "  --final-scale N   coarsest-to-finest schedule stops at 1/N image resolution\n"
+	          << "                    (upstream behaviour is 2; 1 = full resolution)\n"
+	          << "  --show-medium     write per-iteration debug jpgs into APD/<id>/\n";
+}
+
 int main(int argc, char** argv) {
 	if (argc < 2) {
-		std::cerr << "USAGE: APD dense_folder\n";
+		PrintUsage();
 		return EXIT_FAILURE;
 	}
 	path dense_folder(argv[1]);
+	int gpu_index = 0;
+	int final_scale = 2;
+	bool show_medium = false;
+	for (int a = 2; a < argc; ++a) {
+		std::string arg(argv[a]);
+		if (arg == "--gpu" && a + 1 < argc) {
+			gpu_index = std::atoi(argv[++a]);
+		}
+		else if (arg == "--final-scale" && a + 1 < argc) {
+			final_scale = std::atoi(argv[++a]);
+		}
+		else if (arg == "--show-medium") {
+			show_medium = true;
+		}
+		else {
+			PrintUsage();
+			return EXIT_FAILURE;
+		}
+	}
+	if (final_scale < 1 || (final_scale & (final_scale - 1)) != 0) {
+		std::cerr << "--final-scale must be a power of two >= 1\n";
+		return EXIT_FAILURE;
+	}
 	path output_folder = dense_folder / path("APD");
 	create_directory(output_folder);
-	// set cuda device for multi-gpu machine
-	int gpu_index = 0;
-	if (argc == 3) {
-		gpu_index = std::atoi(argv[2]);
-	}
 	cudaSetDevice(gpu_index);
 	// generate problems
 	std::vector<Problem> problems;
 	GenerateSampleList(dense_folder, problems);
-	//if (!CheckImages(problems)) {
-	//	std::cerr << "Images may error, check it!\n";
-	//	return EXIT_FAILURE;
-	//}
+	for (auto& problem : problems) {
+		problem.show_medium_result = show_medium;
+	}
 	int num_images = problems.size();
 	std::cout << "There are " << num_images << " problems needed to be processed!" << std::endl;
 
 	int round_num = ComputeRoundNum(problems);
+	// Upstream runs scales 2^(round_num-1) ... 2 and never the full-resolution
+	// round; --final-scale 1 adds it.
+	int final_scale_log2 = 0;
+	while ((1 << final_scale_log2) < final_scale) final_scale_log2++;
+	const int rounds_to_run = std::max(1, round_num - final_scale_log2);
 
-	std::cout << "Round nums: " << round_num << std::endl;
+	std::cout << "Round nums: " << round_num << ", running " << rounds_to_run << " round(s) down to scale " << final_scale << std::endl;
 	int iteration_index = 0;
 	bool flag = true;
-	for (int i = 0; i < round_num - 1; ++i) {
+	for (int i = 0; i < rounds_to_run; ++i) {
 		/*if(params->)*/
 		for (auto& problem : problems) {
 			problem.iteration = iteration_index;

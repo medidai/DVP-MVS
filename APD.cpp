@@ -1212,14 +1212,14 @@ void APD::InuputInitialization() {
 		path dep_folder = problem.dense_folder / path("dep");
 		path sfm_folder = problem.dense_folder / path("sfm");
 
+		// Medida: dep/*.dmb holds a monocular *depth* map (MoGe/DA3) in the
+		// reference image's pixel grid. Upstream stored Depth-Anything-V2
+		// 0..255 inverse depth and flipped it here; we write depth directly.
 		path ref_dep_folder = dep_folder / path(ToFormatIndex(problem.ref_image_id) + ".dmb");
 		cv::Mat dep;
-		ReadBinMat(ref_dep_folder, dep);
-
-		for (int y = 0; y < dep.rows; y++) {
-			for (int x = 0; x < dep.cols; x++) {
-				dep.at<float>(y, x) = 255 - (dep.at<float>(y, x));
-			}
+		if (!ReadBinMat(ref_dep_folder, dep) || dep.empty() || dep.type() != CV_32FC1) {
+			std::cerr << "Can't read mono depth prior (CV_32FC1 BinMat): " << ref_dep_folder.string() << std::endl;
+			exit(EXIT_FAILURE);
 		}
 
 		path ref_sfm_folder = sfm_folder / path(ToFormatIndex(problem.ref_image_id) + ".txt");
@@ -1250,19 +1250,19 @@ void APD::InuputInitialization() {
 		//std::cout << "xyz_temp: " << xyz_temp[0].x << xyz_temp[0].y << xyz_temp[0].z << std::endl;
 		//std::cout << "xyz_temp.size(): " << xyz_temp.size() << std::endl;
 
+		// Camera is the unscaled one from disk; sfm points are in full-res pixels.
+		Camera full_res_cam;
+		ReadCamera(cam_folder / path(ToFormatIndex(problem.ref_image_id) + "_cam.txt"), full_res_cam);
 		for (int i = 0; i < xy_temp.size(); i++) {
 			float3 PointX = xyz_temp[i];
 			float2 point;
 			float proj_depth;
+			ProjectCamera(PointX, full_res_cam, point, proj_depth);
 
-			path ref_cam_path = cam_folder / path(ToFormatIndex(problem.ref_image_id) + "_cam.txt");
-			Camera cam;
-			ReadCamera(ref_cam_path, cam);
-			ProjectCamera(PointX, cam, point, proj_depth);
-
-			if (int(point.x + 0.5f) > 0 && int(point.x + 0.5f) < dep.cols && int(point.y + 0.5f) > 0 && int(point.y + 0.5f) < dep.rows) {
-				float rate = dep.at<float>(int(point.y + 0.5f), int(point.x + 0.5f)) / proj_depth;
-				rates.push_back(rate);
+			if (proj_depth > 0 && int(point.x + 0.5f) > 0 && int(point.x + 0.5f) < dep.cols && int(point.y + 0.5f) > 0 && int(point.y + 0.5f) < dep.rows) {
+				float mono = dep.at<float>(int(point.y + 0.5f), int(point.x + 0.5f));
+				if (!(mono > 0.0f)) continue;  // sky / invalid mono pixels
+				rates.push_back(mono / proj_depth);
 				xy_temps.push_back(xy_temp[i]);
 			}
 		}
@@ -1270,10 +1270,16 @@ void APD::InuputInitialization() {
 		float rate_max = 0;
 		for (int i = 0; i < rates.size(); i++) {
 			rate_max = MAX(rate_max, rates[i]);
-			//std::cout << rates[i] << " ";
 		}
 
-		float middle_rate = rates[rates.size() / 2];
+		if (rates.empty()) {
+			std::cerr << "No sparse points project into the mono depth prior for image "
+			          << problem.ref_image_id << "; check sfm/ and dep/ inputs" << std::endl;
+			exit(EXIT_FAILURE);
+		}
+		std::vector<float> sorted_rates(rates);
+		std::nth_element(sorted_rates.begin(), sorted_rates.begin() + sorted_rates.size() / 2, sorted_rates.end());
+		float middle_rate = sorted_rates[sorted_rates.size() / 2];
 		for (int y = 0; y < dep.rows; y++) {
 			for (int x = 0; x < dep.cols; x++) {
 				all_rate_map.at<float>(y, x) = middle_rate;
@@ -1624,23 +1630,17 @@ void APD::SupportInitialization() {
 		ReadBinMat(edge_path, edge_host);
 	}
 
-	// !!!!!!!!!重要!!!!!!!!!
-	// 两种版本 Different
-	// 这里是DVP-MVS的结果，但是需要部署DEPANY然后预处理数据集，所以较为麻烦，可先用简易版本替换计算
-	// if (problem.params.use_label) {
-	// 	path label_path = problem.result_folder / path("labels_" + std::to_string(scale) + ".dmb");
-	// 	ReadBinMat(label_path, label_host);
-	// }
-
-	// 这里是简易版本的TSAR-MVS的结果
+	// Medida: use the locally generated texture-segment labels (written by
+	// GetProblemEdges) instead of the upstream "MVS4" external-depth shortcut,
+	// which required an undocumented input folder and never filled label_host.
 	if (problem.params.use_label) {
-		path mvs_folder = problem.dense_folder / path("MVS4");
-		path ref_dep_folder = mvs_folder / path(ToFormatIndex(problem.ref_image_id) + ".dmb");
-		cv::Mat ref_dep;
-		ReadBinMat(ref_dep_folder, ref_dep);
-		if (ref_dep.cols != width || ref_dep.rows != height) {
-			std::cerr << "Depth and Normal doesn't match the images' size!\n";
-			RescaleMatToTargetSize<float>(ref_dep, label_host, cv::Size2i(width, height));
+		path label_path = problem.result_folder / path("labels_" + std::to_string(scale) + ".dmb");
+		if (!ReadBinMat(label_path, label_host) || label_host.empty()) {
+			std::cerr << "Can't read label file: " << label_path.string() << std::endl;
+			exit(EXIT_FAILURE);
+		}
+		if (label_host.cols != width || label_host.rows != height) {
+			RescaleMatToTargetSize<int>(label_host, label_host, cv::Size2i(width, height));
 		}
 	}
 
