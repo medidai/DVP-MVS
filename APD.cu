@@ -4524,6 +4524,8 @@ void APD::RunPatchMatch() {
 #endif // DEBUG_COST_LINE
 	cudaMemcpy(plane_hypotheses_host, plane_hypotheses_cuda, sizeof(float4) * width * height, cudaMemcpyDeviceToHost);
 	cudaMemcpy(weak_info_host.ptr<uchar>(0), weak_info_cuda, width * height * sizeof(uchar), cudaMemcpyDeviceToHost);
+	costs_host = cv::Mat(height, width, CV_32FC1);
+	cudaMemcpy(costs_host.ptr<float>(0), costs_cuda, width * height * sizeof(float), cudaMemcpyDeviceToHost);
 	cudaMemcpy(selected_views_host.ptr<unsigned int>(0), selected_views_cuda, width * height * sizeof(unsigned int), cudaMemcpyDeviceToHost);
 	if (problem.params.use_radius) {
 		cudaMemcpy(radius_host.ptr<int>(0), radius_cuda, width * height * sizeof(int), cudaMemcpyDeviceToHost);

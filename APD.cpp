@@ -1727,6 +1727,10 @@ cv::Mat APD::GetPixelStates() {
 	return weak_info_host;
 }
 
+cv::Mat APD::GetCosts() {
+	return costs_host;
+}
+
 cv::Mat APD::GetSelectedViews() {
 	return selected_views_host;
 }
@@ -1810,7 +1814,7 @@ float GetAngle(const cv::Vec3f& v1, const cv::Vec3f& v2)
 }
 
 // ETH version
-void RunFusion(const path& dense_folder, const std::vector<Problem>& problems)
+void RunFusion(const path& dense_folder, const std::vector<Problem>& problems, int min_fuse_views)
 {
 	int num_images = problems.size();
 	path image_folder = dense_folder / path("images");
@@ -1823,6 +1827,10 @@ void RunFusion(const path& dense_folder, const std::vector<Problem>& problems)
 	std::vector<cv::Mat> masks;
 	std::vector<cv::Mat> blocks;
 	std::vector<cv::Mat> weaks;
+	// Medida: per-view count of source views geometrically agreeing with each
+	// pixel (CV_8UC1). Written as consistency.dmb so depth maps can be filtered
+	// like OpenMVS does instead of being emitted fully dense.
+	std::vector<cv::Mat> consistency;
 	images.clear();
 	cameras.clear();
 	depths.clear();
@@ -1870,6 +1878,7 @@ void RunFusion(const path& dense_folder, const std::vector<Problem>& problems)
 		normals.emplace_back(normal);
 		cv::Mat mask = cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1);
 		masks.emplace_back(mask);
+		consistency.emplace_back(cv::Mat::zeros(depth.rows, depth.cols, CV_8UC1));
 		RescaleMatToTargetSize<uchar>(weak, weak, cv::Size2i(depth.cols, depth.rows));
 		weaks.emplace_back(weak);
 	}
@@ -1889,17 +1898,17 @@ void RunFusion(const path& dense_folder, const std::vector<Problem>& problems)
 					continue;
 				}
 
-				if (masks[ref_index].at<uchar>(r, c) == 1) {
-					continue;
-				}
-
 				float ref_depth = depths[ref_index].at<float>(r, c);
 				if (ref_depth <= 0.0)
 					continue;
+				// Pixels already consumed by another reference's fused point still
+				// get their agreement count; they just don't spawn a second point.
+				const bool already_fused = masks[ref_index].at<uchar>(r, c) == 1;
 				const cv::Vec3f ref_normal = normals[ref_index].at<cv::Vec3f>(r, c);
 				float3 PointX = Get3DPointonWorld(c, r, ref_depth, cameras[ref_index]);
 				float3 consistent_Point = PointX;
 				int num_consistent = 0;
+				int num_agreeing = 0;
 				float dynamic_consistency = 0.0f;
 				std::vector<int2> used_list(num_ngb, make_int2(-1, -1));
 				for (int j = 0; j < num_ngb; ++j) {
@@ -1912,8 +1921,6 @@ void RunFusion(const path& dense_folder, const std::vector<Problem>& problems)
 					int src_r = int(point.y + 0.5f);
 					int src_c = int(point.x + 0.5f);
 					if (src_c >= 0 && src_c < src_cols && src_r >= 0 && src_r < src_rows) {
-						if (masks[src_index].at<uchar>(src_r, src_c) == 1)
-							continue;
 						float src_depth = depths[src_index].at<float>(src_r, src_c);
 						if (src_depth <= 0.0)
 							continue;
@@ -1926,6 +1933,9 @@ void RunFusion(const path& dense_folder, const std::vector<Problem>& problems)
 						float angle = GetAngle(ref_normal, src_normal);
 
 						if (reproj_error < 2.0f && relative_depth_diff < 0.01f && angle < 0.174533f) {
+							num_agreeing++;
+							if (masks[src_index].at<uchar>(src_r, src_c) == 1)
+								continue;
 							used_list[j].x = src_c;
 							used_list[j].y = src_r;
 							float tmp_index = reproj_error + 200 * relative_depth_diff + angle * 10;
@@ -1934,8 +1944,12 @@ void RunFusion(const path& dense_folder, const std::vector<Problem>& problems)
 						}
 					}
 				}
+				uchar& agree = consistency[ref_index].at<uchar>(r, c);
+				agree = std::max<int>(agree, std::min(num_agreeing, 255));
+				if (already_fused)
+					continue;
 				float factor = (weaks[ref_index].at<uchar>(r, c) == WEAK ? 0.45f : 0.3f);
-				if (num_consistent >= 1 && (dynamic_consistency > factor * num_consistent)) {
+				if (num_consistent >= min_fuse_views && (dynamic_consistency > factor * num_consistent)) {
 					PointList point3D;
 					point3D.coord = consistent_Point;
 					float consistent_Color[3] = { (float)images[ref_index].at<cv::Vec3b>(r, c)[0], (float)images[ref_index].at<cv::Vec3b>(r, c)[1], (float)images[ref_index].at<cv::Vec3b>(r, c)[2] };
@@ -1944,6 +1958,8 @@ void RunFusion(const path& dense_folder, const std::vector<Problem>& problems)
 							continue;
 						int src_index = imageIdToindexMap[problem.src_image_ids[j]];
 						masks[src_index].at<uchar>(used_list[j].y, used_list[j].x) = 1;
+						uchar& src_agree = consistency[src_index].at<uchar>(used_list[j].y, used_list[j].x);
+						src_agree = std::max<int>(src_agree, std::min(num_consistent, 255));
 						const auto& color = images[src_index].at<cv::Vec3b>(used_list[j].y, used_list[j].x);
 						consistent_Color[0] += color[0];
 						consistent_Color[1] += color[1];
@@ -1958,6 +1974,9 @@ void RunFusion(const path& dense_folder, const std::vector<Problem>& problems)
 
 			}
 		}
+	}
+	for (int i = 0; i < num_images; ++i) {
+		WriteBinMat(problems[i].result_folder / path("consistency.dmb"), consistency[imageIdToindexMap[problems[i].ref_image_id]]);
 	}
 	path ply_path = dense_folder / path("APD") / path("APD.ply");
 	ExportPointCloud(ply_path, PointCloud);

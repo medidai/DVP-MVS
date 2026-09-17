@@ -49,7 +49,7 @@ std::string ToFormatIndex(int index);
 template <typename TYPE>
 void RescaleMatToTargetSize(const cv::Mat& src, cv::Mat& dst, const cv::Size2i& target_size);
 
-void RunFusion(const path& dense_folder, const std::vector<Problem>& problems);
+void RunFusion(const path& dense_folder, const std::vector<Problem>& problems, int min_fuse_views);
 void RunFusion_TAT_Intermediate(const path& dense_folder, const std::vector<Problem>& problems);
 void RunFusion_TAT_advanced(const path& dense_folder, const std::vector<Problem>& problems);
 
@@ -107,6 +107,7 @@ public:
 	void SetPixelSelectedViews(int r, int c, int temp_selected_views);
 	cv::Mat GetEdge();
 	cv::Mat GetPixelStates();
+	cv::Mat GetCosts();
 	cv::Mat GetSelectedViews();
 	cv::Mat GetRadiusMap();
 	int GetWidth();
@@ -141,6 +142,8 @@ private:
 	int weak_count;
 	cv::Mat weak_info_host;
 	uchar* weak_info_cuda;
+	// Aggregated multi-view matching cost of the final hypothesis, [0, 2], 0 best.
+	cv::Mat costs_host;
 	uchar* weak_reliable_cuda;
 	short2* weak_nearest_strong;
 	// =========================

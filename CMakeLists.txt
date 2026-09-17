@@ -29,12 +29,16 @@ include_directories(.)
 
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 --use_fast_math --maxrregcount=128")
 
+# Container builds must not bake the build host's ISA into a binary that runs
+# on other machines; pass e.g. -DAPD_MARCH=x86-64-v3 there.
+set(APD_MARCH "native" CACHE STRING "Value for -march")
+
 if(CMAKE_COMPILER_IS_GNUCXX)
     add_definitions(-pthread)
     add_definitions(-Wall)
     add_definitions(-Wno-unused-function)
     add_definitions(-Wno-switch)
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -ffast-math -march=native")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -ffast-math -march=${APD_MARCH}")
 endif()
 
 add_executable(

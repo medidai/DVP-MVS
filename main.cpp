@@ -351,6 +351,8 @@ void ProcessProblem(const Problem& problem) {
 	WriteBinMat(normal_path, normal);
 	path weak_path = problem.result_folder / path("weak.bin");
 	WriteBinMat(weak_path, pixel_states);
+	// Medida: photometric confidence source (OpenMVS stores 1 - NCC cost).
+	WriteBinMat(problem.result_folder / path("costs.dmb"), APD.GetCosts());
 	path selected_view_path = problem.result_folder / path("selected_views.bin");
 	WriteBinMat(selected_view_path, APD.GetSelectedViews());
 	if (problem.params.use_radius) {
@@ -405,7 +407,9 @@ static void PrintUsage() {
 	std::cerr << "USAGE: APD dense_folder [--gpu N] [--final-scale N] [--show-medium]\n"
 	          << "  --final-scale N   coarsest-to-finest schedule stops at 1/N image resolution\n"
 	          << "                    (upstream behaviour is 2; 1 = full resolution)\n"
-	          << "  --show-medium     write per-iteration debug jpgs into APD/<id>/\n";
+	          << "  --show-medium     write per-iteration debug jpgs into APD/<id>/\n"
+	          << "  --fusion-only     skip PatchMatch; re-run fusion on existing APD/<id>/ results\n"
+	          << "  --min-fuse-views N  source views that must agree for a fused point (upstream 1)\n";
 }
 
 int main(int argc, char** argv) {
@@ -417,6 +421,8 @@ int main(int argc, char** argv) {
 	int gpu_index = 0;
 	int final_scale = 2;
 	bool show_medium = false;
+	bool fusion_only = false;
+	int min_fuse_views = 1;
 	for (int a = 2; a < argc; ++a) {
 		std::string arg(argv[a]);
 		if (arg == "--gpu" && a + 1 < argc) {
@@ -428,6 +434,12 @@ int main(int argc, char** argv) {
 		else if (arg == "--show-medium") {
 			show_medium = true;
 		}
+		else if (arg == "--fusion-only") {
+			fusion_only = true;
+		}
+		else if (arg == "--min-fuse-views" && a + 1 < argc) {
+			min_fuse_views = std::atoi(argv[++a]);
+		}
 		else {
 			PrintUsage();
 			return EXIT_FAILURE;
@@ -435,6 +447,10 @@ int main(int argc, char** argv) {
 	}
 	if (final_scale < 1 || (final_scale & (final_scale - 1)) != 0) {
 		std::cerr << "--final-scale must be a power of two >= 1\n";
+		return EXIT_FAILURE;
+	}
+	if (min_fuse_views < 1) {
+		std::cerr << "--min-fuse-views must be >= 1\n";
 		return EXIT_FAILURE;
 	}
 	path output_folder = dense_folder / path("APD");
@@ -459,7 +475,8 @@ int main(int argc, char** argv) {
 	std::cout << "Round nums: " << round_num << ", running " << rounds_to_run << " round(s) down to scale " << final_scale << std::endl;
 	int iteration_index = 0;
 	bool flag = true;
-	for (int i = 0; i < rounds_to_run; ++i) {
+	for (int i = 0; i < rounds_to_run && !fusion_only; ++i) {
+		const auto round_start = std::chrono::steady_clock::now();
 		/*if(params->)*/
 		for (auto& problem : problems) {
 			problem.iteration = iteration_index;
@@ -520,10 +537,13 @@ int main(int argc, char** argv) {
 			}
 			iteration_index++;
 		}
-		std::cout << "Round: " << i << " done\n";
+		const double round_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - round_start).count();
+		std::cout << "Round: " << i << " done (scale " << problems[0].scale_size << ", " << round_s << " s)" << std::endl;
 	}
 
-	RunFusion(dense_folder, problems);
+	const auto fusion_start = std::chrono::steady_clock::now();
+	RunFusion(dense_folder, problems, min_fuse_views);
+	std::cout << "Fusion done (" << std::chrono::duration<double>(std::chrono::steady_clock::now() - fusion_start).count() << " s)" << std::endl;
 	// {// delete files
 	// 	for (size_t i = 0; i < problems.size(); ++i) {
 	// 		const auto &problem = problems[i];
