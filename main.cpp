@@ -409,7 +409,10 @@ static void PrintUsage() {
 	          << "                    (upstream behaviour is 2; 1 = full resolution)\n"
 	          << "  --show-medium     write per-iteration debug jpgs into APD/<id>/\n"
 	          << "  --fusion-only     skip PatchMatch; re-run fusion on existing APD/<id>/ results\n"
-	          << "  --min-fuse-views N  source views that must agree for a fused point (upstream 1)\n";
+	          << "  --min-fuse-views N  source views that must agree for a fused point (upstream 1)\n"
+	          << "  --fuse-reproj-px X    max reprojection error for two views to agree (upstream 2)\n"
+	          << "  --fuse-depth-diff X   max relative depth difference to agree (upstream 0.01)\n"
+	          << "  --fuse-normal-deg X   max normal angle to agree; <= 0 disables the test (upstream 10)\n";
 }
 
 int main(int argc, char** argv) {
@@ -423,6 +426,7 @@ int main(int argc, char** argv) {
 	bool show_medium = false;
 	bool fusion_only = false;
 	int min_fuse_views = 1;
+	FusionThresholds fuse_th;
 	for (int a = 2; a < argc; ++a) {
 		std::string arg(argv[a]);
 		if (arg == "--gpu" && a + 1 < argc) {
@@ -439,6 +443,16 @@ int main(int argc, char** argv) {
 		}
 		else if (arg == "--min-fuse-views" && a + 1 < argc) {
 			min_fuse_views = std::atoi(argv[++a]);
+		}
+		else if (arg == "--fuse-reproj-px" && a + 1 < argc) {
+			fuse_th.max_reproj_px = std::atof(argv[++a]);
+		}
+		else if (arg == "--fuse-depth-diff" && a + 1 < argc) {
+			fuse_th.max_rel_depth_diff = std::atof(argv[++a]);
+		}
+		else if (arg == "--fuse-normal-deg" && a + 1 < argc) {
+			const double deg = std::atof(argv[++a]);
+			fuse_th.max_normal_rad = deg > 0 ? deg * M_PI / 180.0 : std::numeric_limits<float>::infinity();
 		}
 		else {
 			PrintUsage();
@@ -542,7 +556,7 @@ int main(int argc, char** argv) {
 	}
 
 	const auto fusion_start = std::chrono::steady_clock::now();
-	RunFusion(dense_folder, problems, min_fuse_views);
+	RunFusion(dense_folder, problems, min_fuse_views, fuse_th);
 	std::cout << "Fusion done (" << std::chrono::duration<double>(std::chrono::steady_clock::now() - fusion_start).count() << " s)" << std::endl;
 	// {// delete files
 	// 	for (size_t i = 0; i < problems.size(); ++i) {

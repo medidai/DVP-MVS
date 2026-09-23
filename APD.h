@@ -49,7 +49,15 @@ std::string ToFormatIndex(int index);
 template <typename TYPE>
 void RescaleMatToTargetSize(const cv::Mat& src, cv::Mat& dst, const cv::Size2i& target_size);
 
-void RunFusion(const path& dense_folder, const std::vector<Problem>& problems, int min_fuse_views);
+// Geometric agreement test shared by point fusion and the per-view consistency.dmb
+// counts. Upstream hardcodes 2 px / 1% / 10 deg, tuned for close-range benchmarks.
+struct FusionThresholds {
+	float max_reproj_px = 2.0f;
+	float max_rel_depth_diff = 0.01f;
+	float max_normal_rad = 0.174533f;
+};
+
+void RunFusion(const path& dense_folder, const std::vector<Problem>& problems, int min_fuse_views, const FusionThresholds& th);
 void RunFusion_TAT_Intermediate(const path& dense_folder, const std::vector<Problem>& problems);
 void RunFusion_TAT_advanced(const path& dense_folder, const std::vector<Problem>& problems);
 

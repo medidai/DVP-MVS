@@ -18,6 +18,7 @@
 // Includes STD libs
 #include <vector>
 #include <string>
+#include <limits>
 #include <iostream>
 #include <fstream>
 #include <sstream>

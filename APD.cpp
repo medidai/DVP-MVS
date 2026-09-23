@@ -1814,7 +1814,7 @@ float GetAngle(const cv::Vec3f& v1, const cv::Vec3f& v2)
 }
 
 // ETH version
-void RunFusion(const path& dense_folder, const std::vector<Problem>& problems, int min_fuse_views)
+void RunFusion(const path& dense_folder, const std::vector<Problem>& problems, int min_fuse_views, const FusionThresholds& th)
 {
 	int num_images = problems.size();
 	path image_folder = dense_folder / path("images");
@@ -1932,7 +1932,7 @@ void RunFusion(const path& dense_folder, const std::vector<Problem>& problems, i
 						float relative_depth_diff = fabs(proj_depth - ref_depth) / ref_depth;
 						float angle = GetAngle(ref_normal, src_normal);
 
-						if (reproj_error < 2.0f && relative_depth_diff < 0.01f && angle < 0.174533f) {
+						if (reproj_error < th.max_reproj_px && relative_depth_diff < th.max_rel_depth_diff && angle < th.max_normal_rad) {
 							num_agreeing++;
 							if (masks[src_index].at<uchar>(src_r, src_c) == 1)
 								continue;
